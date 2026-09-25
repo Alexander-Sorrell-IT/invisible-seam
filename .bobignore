@@ -1,0 +1,57 @@
+# .bobignore — keep junk out of context
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Demo repo runtime artifacts
+demo_repo/**/__pycache__/
+demo_repo/**/*.pyc
+
+# Reports (generated output — not source)
+*.html
+report.html
+reports/
+
+# Media / large files
+*.png
+*.jpg
+*.mp4
+*.pdf
+*.zip
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+
+# Bob sessions (screenshots — not code)
+bob_sessions/
