@@ -1,25 +1,25 @@
-"""Auto-generated seam check for S011."""
+"""Auto-generated seam check for S002."""
 import pytest
 
-def test_S011_type_hint_conflict():
-    """Seam S011: annotation says object but behavior differs."""
+def test_S002_type_hint_conflict():
+    """Seam S002: annotation says list[str] but behavior differs."""
     try:
-        from users import unknown_function
+        from users import get_active_users
     except ImportError:
-        pytest.skip("Cannot import users.unknown_function")
+        pytest.skip("Cannot import users.get_active_users")
     import inspect
-    sig = inspect.signature(unknown_function)
+    sig = inspect.signature(get_active_users)
     params = {
         name: None
         for name, param in sig.parameters.items()
         if param.default is inspect.Parameter.empty
     }
     try:
-        result = unknown_function(**params)
+        result = get_active_users(**params)
     except Exception:
         pytest.skip("Function raised during check call")
     # If the annotation is correct, this assertion should pass.
     # If the seam is real, it will fail (e.g. None returned for list[str]).
     assert result is not None, (
-        f"SEAM CONFIRMED: 'unknown_function' returned None but annotation says 'object'"
+        f"SEAM CONFIRMED: 'get_active_users' returned None but annotation says 'list[str]'"
     )

@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>INVISIBLE SEAM Report</title>
+<style>
+body { font-family: 'Segoe UI', monospace; background: #0d1117; color: #c9d1d9; margin: 2rem; }
+h1 { color: #58a6ff; }
+.summary { background: #161b22; border: 1px solid #30363d; padding: 1rem; border-radius: 6px; margin-bottom: 2rem; }
+.seam { border: 1px solid #30363d; border-radius: 6px; margin-bottom: 1.5rem; padding: 1.2rem; background: #161b22; }
+.seam.fixable { border-left: 4px solid #d29922; }
+.seam.paradox { border-left: 4px solid #bc8cff; }
+.seam-header { font-size: 1.1rem; font-weight: bold; margin-bottom: 0.8rem; }
+.fixable .seam-header { color: #d29922; }
+.paradox .seam-header { color: #bc8cff; }
+.verdict-resolved { color: #3fb950; font-weight: bold; }
+.verdict-unsolved { color: #f85149; font-weight: bold; }
+.label { font-weight: bold; min-width: 110px; display: inline-block; }
+.assert-a { color: #79c0ff; }
+.assert-b { color: #f85149; }
+.check { color: #8b949e; font-family: monospace; font-size: 0.9rem; }
+.question { color: #bc8cff; }
+.source { color: #8b949e; font-size: 0.85rem; margin-left: 0.5rem; }
+.row { margin: 0.3rem 0; }
+</style>
+</head>
+<body>
+<h1>&#x1F50D; INVISIBLE SEAM Report</h1>
+<div class="summary">
+  <strong>6 seam(s) found:</strong>
+  &nbsp;
+  <span style="color:#d29922">4 FIXABLE</span>
+  (4 RESOLVED, 0 UNSOLVED)
+  &nbsp;·&nbsp;
+  <span style="color:#bc8cff">2 PARADOX</span>
+</div>
+
+<div class="seam fixable">
+  <div class="seam-header">SEAM #1 &nbsp; [FIXABLE]</div>
+  <div class="row">
+    <span class="label assert-a">Assertion A:</span>
+    <span class="assert-a">Raises ValueError if token is empty.</span>
+    <span class="source">(auth.py:4)</span>
+  </div>
+  <div class="row">
+    <span class="label assert-b">Assertion B:</span>
+    <span class="assert-b">Function 'authenticate' does NOT raise ValueError — returns instead</span>
+    <span class="source">(auth.py:4)</span>
+  </div>
+  <div class="row"><span class="label">Check:</span> <span class="check">pytest tests/_seam_checks/seam_S003.py -v</span></div>
+  <div class="row"><span class="label">Verdict:</span> <span class="verdict-resolved">RESOLVED</span></div>
+</div>
+<div class="seam fixable">
+  <div class="seam-header">SEAM #2 &nbsp; [FIXABLE]</div>
+  <div class="row">
+    <span class="label assert-a">Assertion A:</span>
+    <span class="assert-a">Function 'get_active_users' return annotation: list[str]</span>
+    <span class="source">(users.py:4)</span>
+  </div>
+  <div class="row">
+    <span class="label assert-b">Assertion B:</span>
+    <span class="assert-b">Function 'get_active_users' returns: list(db.keys()), None (annotated as list[str])</span>
+    <span class="source">(users.py:4)</span>
+  </div>
+  <div class="row"><span class="label">Check:</span> <span class="check">pytest tests/_seam_checks/seam_S008.py -v</span></div>
+  <div class="row"><span class="label">Verdict:</span> <span class="verdict-resolved">RESOLVED</span></div>
+</div>
+<div class="seam fixable">
+  <div class="seam-header">SEAM #3 &nbsp; [FIXABLE]</div>
+  <div class="row">
+    <span class="label assert-a">Assertion A:</span>
+    <span class="assert-a">Parameter 'db' in 'get_active_users' annotated as: dict</span>
+    <span class="source">(users.py:4)</span>
+  </div>
+  <div class="row">
+    <span class="label assert-b">Assertion B:</span>
+    <span class="assert-b">Function 'get_active_users' returns: list(db.keys()), None (annotated as list[str])</span>
+    <span class="source">(users.py:4)</span>
+  </div>
+  <div class="row"><span class="label">Check:</span> <span class="check">pytest tests/_seam_checks/seam_S009.py -v</span></div>
+  <div class="row"><span class="label">Verdict:</span> <span class="verdict-resolved">RESOLVED</span></div>
+</div>
+<div class="seam paradox">
+  <div class="seam-header">SEAM #4 &nbsp; [PARADOX]</div>
+  <div class="row">
+    <span class="label assert-a">Assertion A:</span>
+    <span class="assert-a">Config schema requires field 'api_key' to be present</span>
+    <span class="source">(config.schema.json:2)</span>
+  </div>
+  <div class="row">
+    <span class="label assert-b">Assertion B:</span>
+    <span class="assert-b">Code calls .get('api_key', 'default_insecure_key') — silently uses default when field is absent</span>
+    <span class="source">(config_loader.py:7)</span>
+  </div>
+  <div class="row"><span class="label">Question:</span> <span class="question">Is 'api_key' truly required (schema says required) or optional (code uses a default)? The schema and the code contradict each other.</span></div>
+  
+</div>
+<div class="seam paradox">
+  <div class="seam-header">SEAM #5 &nbsp; [PARADOX]</div>
+  <div class="row">
+    <span class="label assert-a">Assertion A:</span>
+    <span class="assert-a">Config schema requires field 'timeout' to be present</span>
+    <span class="source">(config.schema.json:2)</span>
+  </div>
+  <div class="row">
+    <span class="label assert-b">Assertion B:</span>
+    <span class="assert-b">Code calls .get('timeout', 30) — silently uses default when field is absent</span>
+    <span class="source">(config_loader.py:13)</span>
+  </div>
+  <div class="row"><span class="label">Question:</span> <span class="question">Is 'timeout' truly required (schema says required) or optional (code uses a default)? The schema and the code contradict each other.</span></div>
+  
+</div>
+<div class="seam fixable">
+  <div class="seam-header">SEAM #6 &nbsp; [FIXABLE]</div>
+  <div class="row">
+    <span class="label assert-a">Assertion A:</span>
+    <span class="assert-a">Config field 'timeout' has default value '30'</span>
+    <span class="source">(config.schema.json:10)</span>
+  </div>
+  <div class="row">
+    <span class="label assert-b">Assertion B:</span>
+    <span class="assert-b">Code calls .get('timeout', 30) — silently uses default when field is absent</span>
+    <span class="source">(config_loader.py:13)</span>
+  </div>
+  <div class="row"><span class="label">Check:</span> <span class="check">pytest tests/_seam_checks/seam_S012.py -v</span></div>
+  <div class="row"><span class="label">Verdict:</span> <span class="verdict-resolved">RESOLVED</span></div>
+</div>
+</body>
+</html>
