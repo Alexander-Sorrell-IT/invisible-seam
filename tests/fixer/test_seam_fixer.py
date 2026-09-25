@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from invisible_seam.models import Seam
+from invisible_seam.checker.check_runner import write_check
 from invisible_seam.fixer.seam_fixer import fix_seam
 
 
@@ -47,3 +48,124 @@ def test_fix_skips_paradox_seam(tmp_path: Path) -> None:
     result = fix_seam(seam, tmp_path)
     assert result.classification == "PARADOX"
     assert result.verdict == "CERTAIN"
+
+
+def _required_seam(mod: Path) -> Seam:
+    return Seam(
+        id="S020",
+        classification="FIXABLE",
+        assertion_a="Config field 'api_key' is marked required (comment)",
+        source_a=mod,
+        line_a=1,
+        assertion_b="Code calls .get('api_key', 'x') — silently uses default when field is absent",
+        source_b=mod,
+        line_b=2,
+        check=None,
+        verdict="RESOLVED",
+        question=None,
+    )
+
+
+def test_real_fix_is_closed_by_rerun(tmp_path: Path) -> None:
+    mod = tmp_path / "loader.py"
+    mod.write_text("def load(config: dict) -> str:\n    return config.get('api_key', 'x')\n")
+    seam = write_check(_required_seam(mod), tmp_path)
+    result = fix_seam(seam, tmp_path)
+    assert "config['api_key']" in mod.read_text()
+    assert result.verdict == "CLOSED"
+
+
+def test_fix_that_does_not_help_stays_open(tmp_path: Path) -> None:
+    """The fixer can't patch this line (default via `or`), so the re-run must still confirm it."""
+    mod = tmp_path / "loader.py"
+    mod.write_text("def load(config: dict) -> str:\n    return config.get('api_key') or 'x'\n")
+    seam = write_check(_required_seam(mod), tmp_path)
+    result = fix_seam(seam, tmp_path)
+    assert result.verdict == "RESOLVED"  # still open: the check still confirms the seam
+
+
+def test_doc_fix_edits_the_claimed_function_only(tmp_path: Path) -> None:
+    mod = tmp_path / "loader.py"
+    mod.write_text(
+        "def a(config: dict) -> str:\n"
+        '    """Raises KeyError if a is missing."""\n'
+        "    return config['a']\n"
+        "\n"
+        "def b(config: dict) -> str:\n"
+        '    """Raises KeyError if b is missing."""\n'
+        "    return config.get('b', 'x')\n"
+    )
+    seam = Seam(
+        id="S021",
+        classification="FIXABLE",
+        assertion_a="Raises KeyError if b is missing.",
+        source_a=mod,
+        line_a=5,
+        assertion_b="Function 'b' does NOT raise KeyError — returns instead",
+        source_b=mod,
+        line_b=5,
+        check=None,
+        verdict="RESOLVED",
+        question=None,
+    )
+    result = fix_seam(write_check(seam, tmp_path), tmp_path)
+    text = mod.read_text()
+    assert "Raises KeyError if a is missing." in text  # function a untouched
+    assert "Raises KeyError if b is missing." not in text
+    assert result.verdict == "CLOSED"
+
+
+def test_type_hint_fix_keeps_file_valid_and_closes(tmp_path: Path) -> None:
+    import ast
+
+    src = tmp_path / "src"
+    src.mkdir()
+    mod = src / "users.py"
+    mod.write_text(
+        "def get_users(db: dict) -> list[str]:\n"
+        "    if not db:\n"
+        "        return None\n"
+        "    return list(db.keys())\n"
+    )
+    seam = Seam(
+        id="S030",
+        classification="FIXABLE",
+        assertion_a="Function 'get_users' return annotation: list[str]",
+        source_a=mod,
+        line_a=1,
+        assertion_b="Function 'get_users' returns: list(db.keys()), None",
+        source_b=mod,
+        line_b=1,
+        check=None,
+        verdict="RESOLVED",
+        question=None,
+    )
+    result = fix_seam(write_check(seam, tmp_path), tmp_path)
+    text = mod.read_text()
+    ast.parse(text)  # regression: the old fixer dropped the colon
+    assert "-> list[str] | None:" in text
+    assert result.verdict == "CLOSED"
+
+
+def test_default_mismatch_fix_sets_schema_default_and_closes(tmp_path: Path) -> None:
+    mod = tmp_path / "loader.py"
+    mod.write_text("def load(config: dict) -> int:\n    return config.get('timeout', 60)\n")
+    seam = Seam(
+        id="S040",
+        classification="FIXABLE",
+        assertion_a="Config field 'timeout' has default value '30'",
+        source_a=tmp_path / "config.schema.json",
+        line_a=1,
+        assertion_b="Code calls .get('timeout', 60) — silently uses default when field is absent",
+        source_b=mod,
+        line_b=2,
+        check=None,
+        verdict="RESOLVED",
+        question=None,
+    )
+    seam = write_check(seam, tmp_path)
+    from invisible_seam.checker.check_runner import run_check
+    assert run_check(seam, tmp_path).verdict == "RESOLVED"  # 60 != 30 confirmed by execution
+    result = fix_seam(seam, tmp_path)
+    assert "config.get('timeout', 30)" in mod.read_text()
+    assert result.verdict == "CLOSED"

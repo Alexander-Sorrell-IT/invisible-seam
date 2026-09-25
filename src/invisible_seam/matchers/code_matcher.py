@@ -60,6 +60,9 @@ def _find_function(tree: ast.Module, lineno: int) -> ast.FunctionDef | ast.Async
 
 def _match_type_hint_claim(claim: Claim, repo_path: Path) -> SeamCandidate | None:
     """Matches a type-hint claim against actual code. Returns SeamCandidate or None."""
+    # a parameter annotation says nothing about return behavior: never compare them
+    if claim.claim.startswith("Parameter "):
+        return None
     try:
         source = claim.source_file.read_text(encoding="utf-8")
         tree = ast.parse(source)
@@ -128,6 +131,14 @@ def _match_doc_code_claim(claim: Claim, repo_path: Path) -> SeamCandidate | None
     )
 
 
+def _same_literal(schema_value: str, code_node: ast.expr) -> bool:
+    """Returns True if the schema default string and the code default node are the same literal."""
+    try:
+        return bool(ast.literal_eval(schema_value) == ast.literal_eval(code_node))
+    except (ValueError, SyntaxError):
+        return False
+
+
 def _match_config_fallback_claim(claim: Claim, repo_path: Path) -> SeamCandidate | None:
     """Matches a config-fallback claim against code that silently defaults. Returns SeamCandidate or None."""
     # extract the field name from the claim
@@ -135,6 +146,7 @@ def _match_config_fallback_claim(claim: Claim, repo_path: Path) -> SeamCandidate
     if not m:
         return None
     field = m.group(1)
+    m_default = re.search(r"has default value '(.*)'$", claim.claim)
 
     for py_file in sorted(repo_path.rglob("*.py")):
         if "_seam_checks" in py_file.parts:
@@ -155,6 +167,15 @@ def _match_config_fallback_claim(claim: Claim, repo_path: Path) -> SeamCandidate
                 and isinstance(node.args[0], ast.Constant)
                 and str(node.args[0].value) == field
             ):
+                if m_default is not None and _same_literal(m_default.group(1), node.args[1]):
+                    # schema default and code default agree: no contradiction
+                    return SeamCandidate(
+                        claim_id=claim.id,
+                        behavior=f"Code default for '{field}' matches schema default",
+                        behavior_file=py_file,
+                        behavior_line=node.lineno,
+                        conflict=False,
+                    )
                 behavior = (
                     f"Code calls .get('{field}', {ast.unparse(node.args[1])}) "
                     f"— silently uses default when field is absent"

@@ -49,3 +49,39 @@ def test_config_fallback_conflict_detected(tmp_path: Path) -> None:
     candidates = match_claims(claims, tmp_path)
     conflicts = [c for c in candidates if c.conflict]
     assert len(conflicts) >= 1
+
+
+def test_parameter_annotation_is_never_a_candidate(tmp_path: Path) -> None:
+    (tmp_path / "m.py").write_text(
+        "def get_users(db: dict) -> list[str]:\n"
+        "    if not db:\n"
+        "        return None\n"
+        "    return list(db.keys())\n"
+    )
+    claims = [c for c in extract_claims(tmp_path) if c.claim.startswith("Parameter ")]
+    assert claims
+    assert match_claims(claims, tmp_path) == []
+
+
+def test_matching_schema_and_code_default_is_not_a_conflict(tmp_path: Path) -> None:
+    import json
+    from invisible_seam.extractors.config_extractor import extract_config_claims
+    schema = {"properties": {"timeout": {"type": "integer", "default": 30}}}
+    (tmp_path / "config.schema.json").write_text(json.dumps(schema))
+    (tmp_path / "loader.py").write_text(
+        "def load(config: dict) -> int:\n    return config.get('timeout', 30)\n"
+    )
+    candidates = match_claims(extract_config_claims(tmp_path), tmp_path)
+    assert candidates and not any(c.conflict for c in candidates)
+
+
+def test_different_schema_and_code_default_is_a_conflict(tmp_path: Path) -> None:
+    import json
+    from invisible_seam.extractors.config_extractor import extract_config_claims
+    schema = {"properties": {"timeout": {"type": "integer", "default": 30}}}
+    (tmp_path / "config.schema.json").write_text(json.dumps(schema))
+    (tmp_path / "loader.py").write_text(
+        "def load(config: dict) -> int:\n    return config.get('timeout', 60)\n"
+    )
+    candidates = match_claims(extract_config_claims(tmp_path), tmp_path)
+    assert any(c.conflict for c in candidates)

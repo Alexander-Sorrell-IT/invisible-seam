@@ -47,6 +47,7 @@ def scan(path: Path, report: str, output: Path | None) -> None:
     claim_map = {c.id: c for c in claims}
 
     seams = []
+    dismissed = 0
     for i, candidate in enumerate(candidates, start=1):
         if not candidate.conflict:
             continue
@@ -59,8 +60,14 @@ def scan(path: Path, report: str, output: Path | None) -> None:
         if seam.classification == "FIXABLE":
             seam = write_check(seam, path)
             seam = run_check(seam, path)
+            if seam.verdict == "CLOSED":
+                # the executed check says claim A holds: false alarm
+                dismissed += 1
+                continue
         seams.append(seam)
 
+    if dismissed:
+        click.echo(f"{dismissed} candidate(s) dismissed by their own check.")
     if not seams:
         click.echo("No seams found. All claims match behavior.")
         return
@@ -99,10 +106,11 @@ def fix(path: Path) -> None:
         seam = write_check(seam, path)
         seam = run_check(seam, path)
         if seam.verdict != "RESOLVED":
-            click.echo(f"SKIPPED SEAM #{i} — could not resolve check")
-            continue
+            continue  # not a confirmed seam: nothing to fix
         seam = fix_seam(seam, path)
         if seam.verdict == "CLOSED":
-            click.echo(f"CLOSED: SEAM #{i}  ({seam.assertion_a[:60]})")
+            click.echo(f"CLOSED: {seam.assertion_a[:60]}  (re-proved: {seam.check})")
+        elif seam.verdict == "RESOLVED":
+            click.echo(f"STILL OPEN: {seam.assertion_a[:60]}  (check still confirms the seam)")
         else:
-            click.echo(f"STILL OPEN: SEAM #{i}  ({seam.assertion_a[:60]})")
+            click.echo(f"UNSOLVED: {seam.assertion_a[:60]}  ({seam.question})")

@@ -1,210 +1,264 @@
 from __future__ import annotations
 
+import ast
 import dataclasses
+import os
+import re
 import subprocess
-import textwrap
+import sys
+import tempfile
 from pathlib import Path
 
 from invisible_seam.models import Seam
+
+# Exit-code contract for every generated check script.
+EXIT_HOLDS = 0  # claim A holds -> no seam
+EXIT_CONFIRMED = 1  # claim A broken -> seam confirmed by execution
+EXIT_INCONCLUSIVE = 2  # the check could not decide
+
+_CHECK_PREFIX = "python "
+
+# One template for all check kinds. Parameters are injected with repr() so the
+# generated script is plain, auditable Python. It re-imports the target in a
+# fresh process and re-reads docstrings/annotations at run time, so a fix to
+# either side of the seam changes the outcome.
+_TEMPLATE = '''\
+"""Auto-generated seam check for {seam_id}.
+
+Exit 0 = claim holds (no seam), 1 = seam confirmed, 2 = inconclusive.
+"""
+import importlib
+import inspect
+import re
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[2]
+for _p in (REPO, REPO / "src"):
+    if _p.is_dir():
+        sys.path.insert(0, str(_p))
+
+KIND = {kind!r}
+MODULE = {module!r}
+FUNC = {func!r}
+EXC = {exc!r}
+EXPECTED = {expected!r}
+
+
+def _done(code, label, reason):
+    print(f"{{label}}: {{reason}}")
+    sys.exit(code)
+
+
+def _ann_name(ann):
+    if ann is inspect.Parameter.empty or ann is inspect.Signature.empty:
+        return ""
+    return ann if isinstance(ann, str) else getattr(ann, "__name__", repr(ann))
+
+
+def _arg_for(ann):
+    name = _ann_name(ann).replace(" ", "")
+    if name.startswith("dict"):
+        return {{}}
+    if name == "str":
+        return ""
+    if name.startswith("list"):
+        return []
+    return None
+
+
+def main():
+    try:
+        fn = getattr(importlib.import_module(MODULE), FUNC)
+    except Exception as e:
+        _done(2, "INCONCLUSIVE", f"cannot import {{MODULE}}.{{FUNC}}: {{e}}")
+
+    sig = inspect.signature(fn)
+    args = [
+        _arg_for(p.annotation)
+        for p in sig.parameters.values()
+        if p.default is inspect.Parameter.empty
+        and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+    ]
+
+    if KIND == "type-hint":
+        ann = _ann_name(sig.return_annotation).replace(" ", "")
+        if ann in ("", "object", "Any") or "None" in ann or "Optional" in ann:
+            _done(0, "HOLDS", f"{{FUNC}} return annotation {{ann or 'missing'}} allows None")
+        try:
+            result = fn(*args)
+        except Exception as e:
+            _done(2, "INCONCLUSIVE", f"{{FUNC}}{{tuple(args)}} raised {{type(e).__name__}}: {{e}}")
+        if result is None:
+            _done(1, "CONFIRMED", f"{{FUNC}}{{tuple(args)}} returned None, annotation says {{ann}}")
+        _done(0, "HOLDS", f"{{FUNC}}{{tuple(args)}} returned {{type(result).__name__}}")
+
+    if KIND == "raises":
+        doc = inspect.getdoc(fn) or ""
+        if not re.search(rf"\\braises?\\s+`?{{EXC}}\\b", doc, re.IGNORECASE):
+            _done(0, "HOLDS", f"docstring of {{FUNC}} no longer claims it raises {{EXC}}")
+        try:
+            fn(*args)
+        except Exception as e:
+            if type(e).__name__ == EXC:
+                _done(0, "HOLDS", f"{{FUNC}}{{tuple(args)}} raised {{EXC}} as documented")
+            _done(2, "INCONCLUSIVE", f"{{FUNC}}{{tuple(args)}} raised {{type(e).__name__}}, not {{EXC}}")
+        _done(1, "CONFIRMED", f"{{FUNC}}{{tuple(args)}} returned normally; docs say it raises {{EXC}}")
+
+    if KIND == "config-required":
+        try:
+            value = fn({{}})
+        except (KeyError, ValueError) as e:
+            _done(0, "HOLDS", f"{{FUNC}}({{{{}}}}) raised {{type(e).__name__}}: field is enforced")
+        except Exception as e:
+            _done(2, "INCONCLUSIVE", f"{{FUNC}}({{{{}}}}) raised {{type(e).__name__}}: {{e}}")
+        _done(1, "CONFIRMED", f"{{FUNC}}({{{{}}}}) returned {{value!r}} instead of failing")
+
+    if KIND == "config-default":
+        try:
+            value = fn({{}})
+        except Exception as e:
+            _done(2, "INCONCLUSIVE", f"{{FUNC}}({{{{}}}}) raised {{type(e).__name__}}: {{e}}")
+        if value == EXPECTED:
+            _done(0, "HOLDS", f"{{FUNC}}({{{{}}}}) returned schema default {{EXPECTED!r}}")
+        _done(1, "CONFIRMED", f"{{FUNC}}({{{{}}}}) returned {{value!r}}, schema default is {{EXPECTED!r}}")
+
+    _done(2, "INCONCLUSIVE", f"unknown check kind {{KIND}}")
+
+
+# Any crash is inconclusive. It must never fall through to exit 1 (= confirmed).
+try:
+    main()
+except SystemExit:
+    raise
+except BaseException as e:
+    _done(2, "INCONCLUSIVE", f"check crashed: {{type(e).__name__}}: {{e}}")
+'''
 
 
 def _checks_dir(repo_path: Path) -> Path:
     """Returns the directory for generated seam check files. Creates it if needed."""
     d = repo_path / "tests" / "_seam_checks"
     d.mkdir(parents=True, exist_ok=True)
-    init = d / "__init__.py"
-    if not init.exists():
-        init.write_text("")
     return d
 
 
-def _write_type_hint_check(seam: Seam, repo_path: Path) -> str:
-    """Writes a pytest file for a type-hint seam. Returns the pytest command string."""
-    checks_dir = _checks_dir(repo_path)
-    check_file = checks_dir / f"seam_{seam.id}.py"
-
-    # derive module import path from source file
-    try:
-        rel = seam.source_a.relative_to(repo_path / "src")
-        module = str(rel.with_suffix("")).replace("/", ".")
-    except ValueError:
+def _module_for(source: Path, repo_path: Path) -> str:
+    """Returns the dotted import path for source, relative to repo/src or the repo root."""
+    for root in (repo_path / "src", repo_path):
         try:
-            rel = seam.source_a.relative_to(repo_path)
-            module = str(rel.with_suffix("")).replace("/", ".")
+            rel = source.resolve().relative_to(root.resolve())
         except ValueError:
-            module = seam.source_a.stem
-
-    # extract the function name from assertion_a
-    import re
-    m = re.search(r"Function '(\w+)'", seam.assertion_a)
-    func_name = m.group(1) if m else "unknown_function"
-
-    # extract annotated return type
-    m2 = re.search(r"annotation:\s*(.+)$", seam.assertion_a)
-    ann = m2.group(1).strip() if m2 else "object"
-
-    code = textwrap.dedent(f'''\
-        """Auto-generated seam check for {seam.id}."""
-        import pytest
-
-        def test_{seam.id}_type_hint_conflict():
-            """Seam {seam.id}: annotation says {ann} but behavior differs."""
-            try:
-                from {module} import {func_name}
-            except ImportError:
-                pytest.skip("Cannot import {module}.{func_name}")
-            import inspect
-            sig = inspect.signature({func_name})
-            params = {{
-                name: None
-                for name, param in sig.parameters.items()
-                if param.default is inspect.Parameter.empty
-            }}
-            try:
-                result = {func_name}(**params)
-            except Exception:
-                pytest.skip("Function raised during check call")
-            # If the annotation is correct, this assertion should pass.
-            # If the seam is real, it will fail (e.g. None returned for list[str]).
-            assert result is not None, (
-                f"SEAM CONFIRMED: '{func_name}' returned None but annotation says {ann!r}"
-            )
-    ''')
-
-    check_file.write_text(code, encoding="utf-8")
-    return f"pytest {check_file.relative_to(repo_path)} -v"
+            continue
+        return ".".join(rel.with_suffix("").parts)
+    return source.stem
 
 
-def _write_config_fallback_check(seam: Seam, repo_path: Path) -> str:
-    """Writes a pytest file for a config-fallback seam. Returns the pytest command string."""
-    import re
-    checks_dir = _checks_dir(repo_path)
-    check_file = checks_dir / f"seam_{seam.id}.py"
-
-    m = re.search(r"\.get\('(\w+)'", seam.assertion_b)
-    if not m:
-        m = re.search(r"'(\w+)'", seam.assertion_a)
-    field = m.group(1) if m else "unknown_field"
-
+def _enclosing_function(source: Path, lineno: int) -> str | None:
+    """Returns the name of the function whose body spans lineno in source."""
     try:
-        rel = seam.source_b.relative_to(repo_path / "src")
-        module = str(rel.with_suffix("")).replace("/", ".")
-    except ValueError:
-        try:
-            rel = seam.source_b.relative_to(repo_path)
-            module = str(rel.with_suffix("")).replace("/", ".")
-        except ValueError:
-            module = seam.source_b.stem
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+    except (SyntaxError, OSError):
+        return None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            end = node.end_lineno if node.end_lineno is not None else node.lineno
+            if node.lineno <= lineno <= end:
+                return node.name
+    return None
 
-    code = textwrap.dedent(f'''\
-        """Auto-generated seam check for {seam.id}."""
-        import pytest
 
-        def test_{seam.id}_config_fallback():
-            """Seam {seam.id}: config field '{field}' should be required but has a silent default."""
-            import importlib
+def _check_params(seam: Seam, repo_path: Path) -> dict[str, object] | None:
+    """Derives the template parameters for seam. Returns None if no check can be built."""
+    a = seam.assertion_a
+    m = re.search(r"Function '(\w+)' return annotation:", a)
+    if m:
+        return {
+            "kind": "type-hint",
+            "module": _module_for(seam.source_a, repo_path),
+            "func": m.group(1),
+            "exc": None,
+            "expected": None,
+        }
+
+    m_cfg = re.search(r"Config (?:schema requires field|field) '(\w+)'", a)
+    if m_cfg:
+        func = _enclosing_function(seam.source_b, seam.line_b)
+        if func is None:
+            return None
+        m_default = re.search(r"has default value '(.*)'$", a)
+        if m_default:
             try:
-                mod = importlib.import_module("{module}")
-            except ImportError:
-                pytest.skip("Cannot import {module}")
+                expected = ast.literal_eval(m_default.group(1))
+            except (ValueError, SyntaxError):
+                expected = m_default.group(1)
+            kind = "config-default"
+        else:
+            expected = None
+            kind = "config-required"
+        return {
+            "kind": kind,
+            "module": _module_for(seam.source_b, repo_path),
+            "func": func,
+            "exc": None,
+            "expected": expected,
+        }
 
-            # Find a callable that takes a config dict
-            import inspect
-            loader = None
-            for name, obj in inspect.getmembers(mod, inspect.isfunction):
-                sig = inspect.signature(obj)
-                params = list(sig.parameters.keys())
-                if params and ("config" in params[0] or "cfg" in params[0] or "settings" in params[0]):
-                    loader = obj
-                    break
-
-            if loader is None:
-                pytest.skip("No config loader function found in {module}")
-
-            # Call with empty dict — should raise, but will silently default if seam is real
-            with pytest.raises((KeyError, ValueError)):
-                loader({{}})
-    ''')
-
-    check_file.write_text(code, encoding="utf-8")
-    return f"pytest {check_file.relative_to(repo_path)} -v"
-
-
-def _write_doc_code_check(seam: Seam, repo_path: Path) -> str:
-    """Writes a pytest file for a doc-code (raises) seam. Returns the pytest command string."""
-    import re
-    checks_dir = _checks_dir(repo_path)
-    check_file = checks_dir / f"seam_{seam.id}.py"
-
-    m = re.search(r"raises?\s+(\w+)", seam.assertion_a, re.IGNORECASE)
-    exc_name = m.group(1) if m else "Exception"
-
-    m2 = re.search(r"Function '(\w+)'", seam.assertion_b)
-    func_name = m2.group(1) if m2 else "unknown_function"
-
-    try:
-        rel = seam.source_b.relative_to(repo_path / "src")
-        module = str(rel.with_suffix("")).replace("/", ".")
-    except ValueError:
-        try:
-            rel = seam.source_b.relative_to(repo_path)
-            module = str(rel.with_suffix("")).replace("/", ".")
-        except ValueError:
-            module = seam.source_b.stem
-
-    code = textwrap.dedent(f'''\
-        """Auto-generated seam check for {seam.id}."""
-        import pytest
-
-        def test_{seam.id}_raises_claim():
-            """Seam {seam.id}: docstring claims raises {exc_name} but code may not."""
-            try:
-                from {module} import {func_name}
-            except ImportError:
-                pytest.skip("Cannot import {module}.{func_name}")
-            # Call with empty/falsy input to trigger the condition
-            with pytest.raises({exc_name}):
-                {func_name}("")
-    ''')
-
-    check_file.write_text(code, encoding="utf-8")
-    return f"pytest {check_file.relative_to(repo_path)} -v"
+    m_exc = re.search(r"\braises?\s+`?(\w+)", a, re.IGNORECASE)
+    m_func = re.search(r"Function '(\w+)'", seam.assertion_b)
+    if m_exc and m_func:
+        return {
+            "kind": "raises",
+            "module": _module_for(seam.source_b, repo_path),
+            "func": m_func.group(1),
+            "exc": m_exc.group(1),
+            "expected": None,
+        }
+    return None
 
 
 def write_check(seam: Seam, repo_path: Path) -> Seam:
-    """Writes a deterministic check for a FIXABLE seam. Returns updated Seam with check set."""
+    """Writes a deterministic check script for a FIXABLE seam. Returns updated Seam."""
     if seam.classification != "FIXABLE":
         return seam
-
-    import re
-    if re.search(r"annotation:", seam.assertion_a):
-        check_cmd = _write_type_hint_check(seam, repo_path)
-    elif "config" in seam.assertion_a.lower() and (
-        "required" in seam.assertion_a.lower() or "default" in seam.assertion_a.lower()
-    ):
-        check_cmd = _write_config_fallback_check(seam, repo_path)
-    elif re.search(r"raises?", seam.assertion_a, re.IGNORECASE):
-        check_cmd = _write_doc_code_check(seam, repo_path)
-    else:
-        check_cmd = _write_type_hint_check(seam, repo_path)
-
-    return dataclasses.replace(seam, check=check_cmd)
+    params = _check_params(seam, repo_path)
+    if params is None:
+        return dataclasses.replace(seam, check=None)
+    check_file = _checks_dir(repo_path) / f"seam_{seam.id}.py"
+    check_file.write_text(_TEMPLATE.format(seam_id=seam.id, **params), encoding="utf-8")
+    return dataclasses.replace(
+        seam, check=f"{_CHECK_PREFIX}{check_file.relative_to(repo_path).as_posix()}"
+    )
 
 
 def run_check(seam: Seam, repo_path: Path) -> Seam:
-    """Executes the check. Returns updated Seam with verdict RESOLVED or UNSOLVED."""
-    if seam.check is None:
-        return dataclasses.replace(seam, verdict="UNSOLVED")
+    """Executes the check. Exit 1 -> RESOLVED, 0 -> CLOSED, anything else -> UNSOLVED."""
+    if seam.check is None or not seam.check.startswith(_CHECK_PREFIX):
+        return dataclasses.replace(seam, verdict="UNSOLVED", question="no runnable check")
 
-    try:
-        result = subprocess.run(
-            seam.check.split(),
-            capture_output=True,
-            cwd=repo_path,
-            timeout=30,
-        )
-        # RESOLVED means the check ran and gave a definitive answer
-        # (pass or fail both count as RESOLVED — the check ran)
+    script = repo_path / seam.check[len(_CHECK_PREFIX):]
+    if not script.is_file():
+        return dataclasses.replace(seam, verdict="UNSOLVED", question=f"missing check {script}")
+
+    # Fresh bytecode cache per run: a fix that keeps the file size and mtime second
+    # identical must not be masked by a stale __pycache__ entry.
+    with tempfile.TemporaryDirectory(prefix="seam_pyc_") as pyc_dir:
+        env = {**os.environ, "PYTHONPYCACHEPREFIX": pyc_dir, "PYTHONDONTWRITEBYTECODE": "1"}
+        try:
+            result = subprocess.run(
+                [sys.executable, str(script)],
+                capture_output=True,
+                text=True,
+                cwd=repo_path,
+                env=env,
+                timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            return dataclasses.replace(seam, verdict="UNSOLVED", question="check timed out")
+
+    reason = (result.stdout.strip().splitlines() or [result.stderr.strip()[-200:]])[-1]
+    if result.returncode == EXIT_CONFIRMED:
         return dataclasses.replace(seam, verdict="RESOLVED")
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return dataclasses.replace(seam, verdict="UNSOLVED")
+    if result.returncode == EXIT_HOLDS:
+        return dataclasses.replace(seam, verdict="CLOSED")
+    return dataclasses.replace(seam, verdict="UNSOLVED", question=reason)
