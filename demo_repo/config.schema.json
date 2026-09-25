@@ -1,0 +1,19 @@
+{
+  "required": ["api_key", "timeout"],
+  "properties": {
+    "api_key": {
+      "type": "string",
+      "description": "API key for authentication"
+    },
+    "timeout": {
+      "type": "integer",
+      "default": 30,
+      "description": "Request timeout in seconds"
+    },
+    "retries": {
+      "type": "integer",
+      "default": 3,
+      "description": "Number of retries on failure"
+    }
+  }
+}

@@ -1,0 +1,2 @@
+[console_scripts]
+seam = invisible_seam.cli:main
