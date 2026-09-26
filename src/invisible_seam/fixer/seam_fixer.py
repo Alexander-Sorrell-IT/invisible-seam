@@ -164,9 +164,11 @@ def _get_calls_to_subscript(target: Path, func_name: str) -> bool:
     ]
     # right-to-left so earlier column offsets on the same line stay valid
     for n in sorted(calls, key=lambda c: (c.lineno, c.col_offset), reverse=True):
-        assert isinstance(n.func, ast.Attribute) and n.end_col_offset is not None
+        key = n.args[0]
+        assert isinstance(n.func, ast.Attribute) and isinstance(key, ast.Constant)
+        assert n.end_col_offset is not None
         line = lines[n.lineno - 1]
-        new = f"{ast.unparse(n.func.value)}[{n.args[0].value!r}]"
+        new = f"{ast.unparse(n.func.value)}[{key.value!r}]"
         lines[n.lineno - 1] = line[: n.col_offset] + new + line[n.end_col_offset :]
     if calls:
         target.write_text("".join(lines), encoding="utf-8")
