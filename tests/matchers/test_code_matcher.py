@@ -85,3 +85,19 @@ def test_different_schema_and_code_default_is_a_conflict(tmp_path: Path) -> None
     )
     candidates = match_claims(extract_config_claims(tmp_path), tmp_path)
     assert any(c.conflict for c in candidates)
+
+
+def test_readme_claim_is_matched_against_the_named_function(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text(
+        "# Svc\n\n### `load(config)`\n\nRaises `KeyError` if the key is missing.\n"
+        "\n## Notes\n\nEverything raises KeyError loudly.\n"
+    )
+    (tmp_path / "loader.py").write_text(
+        "def load(config: dict) -> str:\n    return config.get('k', 'x')\n"
+    )
+    claims = [c for c in extract_claims(tmp_path) if c.source_file.name == "README.md"]
+    assert [c.subject for c in claims] == ["load", None]  # section ends at next heading
+    candidates = match_claims(claims, tmp_path)
+    assert len(candidates) == 1  # the claim with no function section is not guessed at
+    assert candidates[0].conflict
+    assert candidates[0].behavior_file.name == "loader.py"

@@ -43,11 +43,24 @@ MODULE = {module!r}
 FUNC = {func!r}
 EXC = {exc!r}
 EXPECTED = {expected!r}
+CLAIM_FILE = {claim_file!r}  # doc file holding the claim (repo-relative), None = docstring
+CLAIM_LINE = {claim_line!r}
+CLAIM_RE = {claim_re!r}
 
 
 def _done(code, label, reason):
     print(f"{{label}}: {{reason}}")
     sys.exit(code)
+
+
+def _claim_still_made(fn):
+    """Re-reads the claim where it lives now: the doc line, or the live docstring."""
+    if CLAIM_FILE is not None:
+        lines = (REPO / CLAIM_FILE).read_text(encoding="utf-8").splitlines()
+        text = lines[CLAIM_LINE - 1] if 0 < CLAIM_LINE <= len(lines) else ""
+    else:
+        text = inspect.getdoc(fn) or ""
+    return re.search(CLAIM_RE, text, re.IGNORECASE) is not None
 
 
 def _ann_name(ann):
@@ -94,9 +107,8 @@ def main():
         _done(0, "HOLDS", f"{{FUNC}}{{tuple(args)}} returned {{type(result).__name__}}")
 
     if KIND == "raises":
-        doc = inspect.getdoc(fn) or ""
-        if not re.search(rf"\\braises?\\s+`?{{EXC}}\\b", doc, re.IGNORECASE):
-            _done(0, "HOLDS", f"docstring of {{FUNC}} no longer claims it raises {{EXC}}")
+        if not _claim_still_made(fn):
+            _done(0, "HOLDS", f"the docs no longer claim {{FUNC}} raises {{EXC}}")
         try:
             fn(*args)
         except Exception as e:
@@ -104,6 +116,17 @@ def main():
                 _done(0, "HOLDS", f"{{FUNC}}{{tuple(args)}} raised {{EXC}} as documented")
             _done(2, "INCONCLUSIVE", f"{{FUNC}}{{tuple(args)}} raised {{type(e).__name__}}, not {{EXC}}")
         _done(1, "CONFIRMED", f"{{FUNC}}{{tuple(args)}} returned normally; docs say it raises {{EXC}}")
+
+    if KIND == "never-none":
+        if not _claim_still_made(fn):
+            _done(0, "HOLDS", f"the docs no longer claim {{FUNC}} never returns None")
+        try:
+            result = fn(*args)
+        except Exception as e:
+            _done(2, "INCONCLUSIVE", f"{{FUNC}}{{tuple(args)}} raised {{type(e).__name__}}: {{e}}")
+        if result is None:
+            _done(1, "CONFIRMED", f"{{FUNC}}{{tuple(args)}} returned None; docs say it never does")
+        _done(0, "HOLDS", f"{{FUNC}}{{tuple(args)}} returned {{type(result).__name__}}, not None")
 
     if KIND == "config-required":
         try:
@@ -168,8 +191,27 @@ def _enclosing_function(source: Path, lineno: int) -> str | None:
     return None
 
 
+_NEVER_NONE_RE = r"\bnever\s+returns?\s+`?None\b"
+
+
+def _claim_location(seam: Seam, repo_path: Path) -> tuple[str | None, int]:
+    """Returns (repo-relative doc file, line) for a doc claim; (None, 0) for a docstring."""
+    if seam.source_a.suffix == ".py":
+        return None, 0
+    return seam.source_a.resolve().relative_to(repo_path.resolve()).as_posix(), seam.line_a
+
+
 def _check_params(seam: Seam, repo_path: Path) -> dict[str, object] | None:
     """Derives the template parameters for seam. Returns None if no check can be built."""
+    params = _kind_params(seam, repo_path)
+    if params is None:
+        return None
+    claim_file, claim_line = _claim_location(seam, repo_path)
+    return {"claim_file": claim_file, "claim_line": claim_line, "claim_re": None, **params}
+
+
+def _kind_params(seam: Seam, repo_path: Path) -> dict[str, object] | None:
+    """Returns the kind-specific template parameters, or None if no check can be built."""
     a = seam.assertion_a
     m = re.search(r"Function '(\w+)' return annotation:", a)
     if m:
@@ -179,6 +221,17 @@ def _check_params(seam: Seam, repo_path: Path) -> dict[str, object] | None:
             "func": m.group(1),
             "exc": None,
             "expected": None,
+        }
+
+    m_func = re.search(r"Function '(\w+)'", seam.assertion_b)
+    if re.search(_NEVER_NONE_RE, a, re.IGNORECASE) and m_func:
+        return {
+            "kind": "never-none",
+            "module": _module_for(seam.source_b, repo_path),
+            "func": m_func.group(1),
+            "exc": None,
+            "expected": None,
+            "claim_re": _NEVER_NONE_RE,
         }
 
     m_cfg = re.search(r"Config (?:schema requires field|field) '(\w+)'", a)
@@ -205,7 +258,6 @@ def _check_params(seam: Seam, repo_path: Path) -> dict[str, object] | None:
         }
 
     m_exc = re.search(r"\braises?\s+`?(\w+)", a, re.IGNORECASE)
-    m_func = re.search(r"Function '(\w+)'", seam.assertion_b)
     if m_exc and m_func:
         return {
             "kind": "raises",
@@ -213,6 +265,7 @@ def _check_params(seam: Seam, repo_path: Path) -> dict[str, object] | None:
             "func": m_func.group(1),
             "exc": m_exc.group(1),
             "expected": None,
+            "claim_re": rf"\braises?\s+`?{m_exc.group(1)}\b",
         }
     return None
 

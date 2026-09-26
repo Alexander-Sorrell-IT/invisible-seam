@@ -38,7 +38,8 @@ def scan(path: Path, report: str, output: Path | None) -> None:
     from invisible_seam.report.terminal_report import render_terminal
     from invisible_seam.report.html_report import render_html
 
-    claims = extract_claims(path) + extract_config_claims(path)
+    doc_claims = extract_claims(path)
+    claims = doc_claims + extract_config_claims(path, start_id=len(doc_claims) + 1)
     if not claims:
         click.echo("No claims found.")
         return
@@ -92,21 +93,25 @@ def fix(path: Path) -> None:
     from invisible_seam.checker.check_runner import write_check, run_check
     from invisible_seam.fixer.seam_fixer import fix_seam
 
-    claims = extract_claims(path) + extract_config_claims(path)
+    doc_claims = extract_claims(path)
+    claims = doc_claims + extract_config_claims(path, start_id=len(doc_claims) + 1)
     candidates = match_claims(claims, path)
     claim_map = {c.id: c for c in claims}
 
-    for i, candidate in enumerate(candidates, start=1):
+    # pass 1: confirm every seam by execution BEFORE changing anything
+    confirmed = []
+    for candidate in candidates:
         if not candidate.conflict:
             continue
-        claim = claim_map[candidate.claim_id]
-        seam = classify(candidate, claim)
+        seam = classify(candidate, claim_map[candidate.claim_id])
         if seam.classification != "FIXABLE":
             continue
-        seam = write_check(seam, path)
-        seam = run_check(seam, path)
-        if seam.verdict != "RESOLVED":
-            continue  # not a confirmed seam: nothing to fix
+        seam = run_check(write_check(seam, path), path)
+        if seam.verdict == "RESOLVED":
+            confirmed.append(seam)
+
+    # pass 2: patch each confirmed seam, then re-run its own check
+    for seam in confirmed:
         seam = fix_seam(seam, path)
         if seam.verdict == "CLOSED":
             click.echo(f"CLOSED: {seam.assertion_a[:60]}  (re-proved: {seam.check})")

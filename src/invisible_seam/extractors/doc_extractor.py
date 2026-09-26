@@ -8,11 +8,14 @@ from invisible_seam.models import Claim
 
 _BEHAVIORAL_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\breturns?\s+\w+", re.IGNORECASE),
-    re.compile(r"\braises?\s+\w+", re.IGNORECASE),
+    re.compile(r"\braises?\s+`?\w+", re.IGNORECASE),
     re.compile(r"\bdefaults?\s+to\b", re.IGNORECASE),
     re.compile(r"\brequires?\s+\w+", re.IGNORECASE),
     re.compile(r"\bmust\s+\w+", re.IGNORECASE),
 ]
+
+
+_HEADING_FUNC = re.compile(r"`(\w+)\(")
 
 
 def _is_behavioral(text: str) -> bool:
@@ -33,8 +36,15 @@ def _extract_readme_claims(repo_path: Path, counter: list[int]) -> list[Claim]:
     for name in ("README.md", "README.rst", "readme.md"):
         readme = repo_path / name
         if readme.exists():
+            subject: str | None = None
             for lineno, line in enumerate(readme.read_text(encoding="utf-8").splitlines(), start=1):
                 line = line.strip()
+                if line.startswith("#"):
+                    # a heading like "### `load_api_key(config)`" names the function
+                    # the following lines describe; any other heading ends that section
+                    m = _HEADING_FUNC.search(line)
+                    subject = m.group(1) if m else None
+                    continue
                 if line and _is_behavioral(line):
                     claims.append(
                         Claim(
@@ -43,6 +53,7 @@ def _extract_readme_claims(repo_path: Path, counter: list[int]) -> list[Claim]:
                             claim=line,
                             source_file=readme,
                             source_line=lineno,
+                            subject=subject,
                         )
                     )
             break
