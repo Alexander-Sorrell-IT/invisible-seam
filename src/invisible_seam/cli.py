@@ -113,8 +113,10 @@ def fix(path: Path) -> None:
     # pass 2: patch each confirmed seam, then re-run its own check
     for seam in confirmed:
         seam = fix_seam(seam, path)
-        if seam.verdict == "CLOSED":
-            click.echo(f"CLOSED: {seam.assertion_a[:60]}  (re-proved: {seam.check})")
+        if seam.verdict == "CLOSED" and seam.fixed == "already":
+            click.echo(f"CLOSED: {seam.assertion_a[:60]}  [already closed by an earlier fix]")
+        elif seam.verdict == "CLOSED":
+            click.echo(f"CLOSED: {seam.assertion_a[:60]}  [fixed in {seam.fixed}]")
         elif seam.verdict == "RESOLVED":
             click.echo(f"STILL OPEN: {seam.assertion_a[:60]}  (check still confirms the seam)")
         else:

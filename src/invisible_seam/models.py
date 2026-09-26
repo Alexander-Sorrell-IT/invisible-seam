@@ -49,3 +49,5 @@ class Seam:
     check: str | None
     verdict: Verdict
     question: str | None
+    # which side `seam fix` changed: "code", "docs", or "already" (closed by an earlier fix)
+    fixed: str | None = None

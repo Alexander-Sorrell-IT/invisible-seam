@@ -41,17 +41,40 @@ def test_type_hint_classifies_as_fixable(tmp_path: Path) -> None:
     assert seam.question is None
 
 
-def test_config_fallback_required_with_default_is_paradox(tmp_path: Path) -> None:
+def _schema_pair(tmp_path: Path, schema: dict, behavior: str) -> tuple[SeamCandidate, Claim]:
+    import dataclasses
+    import json
+
+    schema_file = tmp_path / "config.schema.json"
+    schema_file.write_text(json.dumps(schema))
     candidate, claim = _make_pair(
+        tmp_path, "config-fallback", "Config schema requires field 'api_key' to be present", behavior
+    )
+    return candidate, dataclasses.replace(claim, source_file=schema_file)
+
+
+def test_required_field_with_code_default_is_fixable(tmp_path: Path) -> None:
+    """Schema is unambiguous (required, no default): the code is simply wrong."""
+    candidate, claim = _schema_pair(
         tmp_path,
-        "config-fallback",
-        "Config schema requires field 'api_key' to be present",
+        {"required": ["api_key"], "properties": {"api_key": {"type": "string"}}},
         "Code calls .get('api_key', 'default') — silently uses default when field is absent",
     )
     seam = classify(candidate, claim)
-    # required + code has a default = PARADOX (schema and code contradict each other)
+    assert seam.classification == "FIXABLE"
+    assert seam.question is None
+
+
+def test_required_field_with_schema_default_is_paradox(tmp_path: Path) -> None:
+    """The schema contradicts itself: no code change can settle it."""
+    candidate, claim = _schema_pair(
+        tmp_path,
+        {"required": ["api_key"], "properties": {"api_key": {"type": "string", "default": "x"}}},
+        "The same schema gives 'api_key' a default of 'x'",
+    )
+    seam = classify(candidate, claim)
     assert seam.classification == "PARADOX"
-    assert seam.question is not None
+    assert seam.question is not None and "required AND gives it a default" in seam.question
 
 
 def test_config_fallback_default_only_is_fixable(tmp_path: Path) -> None:

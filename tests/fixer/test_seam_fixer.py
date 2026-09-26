@@ -93,7 +93,7 @@ def test_doc_fix_edits_the_claimed_function_only(tmp_path: Path) -> None:
         "\n"
         "def b(config: dict) -> str:\n"
         '    """Raises KeyError if b is missing."""\n'
-        "    return config.get('b', 'x')\n"
+        "    return str(len(config))\n"
     )
     seam = Seam(
         id="S021",
@@ -113,6 +113,7 @@ def test_doc_fix_edits_the_claimed_function_only(tmp_path: Path) -> None:
     assert "Raises KeyError if a is missing." in text  # function a untouched
     assert "Raises KeyError if b is missing." not in text
     assert result.verdict == "CLOSED"
+    assert result.fixed == "docs"  # no safe code fix exists for b
 
 
 def test_type_hint_fix_keeps_file_valid_and_closes(tmp_path: Path) -> None:
@@ -288,5 +289,80 @@ def test_readme_raises_claim_with_backticks_is_fixed(tmp_path: Path) -> None:
         question=None,
     )
     result = fix_seam(write_check(seam, tmp_path), tmp_path)
-    assert "Raises `KeyError`" not in readme.read_text()
+    assert "config['k']" in mod.read_text()  # fail loud: the code now raises
+    assert "Raises `KeyError`" in readme.read_text()  # the README was right; kept
     assert result.verdict == "CLOSED"
+    assert result.fixed == "code"
+
+
+def _raises_seam(mod: Path, func: str, exc: str, sid: str) -> Seam:
+    return Seam(
+        id=sid,
+        classification="FIXABLE",
+        assertion_a=f"Raises {exc} if the token is empty or None.",
+        source_a=mod,
+        line_a=1,
+        assertion_b=f"Function '{func}' does NOT raise {exc} — returns instead",
+        source_b=mod,
+        line_b=1,
+        check=None,
+        verdict="RESOLVED",
+        question=None,
+    )
+
+
+def test_guard_return_becomes_raise(tmp_path: Path) -> None:
+    mod = tmp_path / "auth.py"
+    mod.write_text(
+        "def authenticate(token: str) -> bool:\n"
+        '    """Raises ValueError if the token is empty or None."""\n'
+        "    if not token:\n"
+        "        return False\n"
+        "    return token.startswith('valid_')\n"
+    )
+    result = fix_seam(write_check(_raises_seam(mod, "authenticate", "ValueError", "S050"), tmp_path), tmp_path)
+    text = mod.read_text()
+    assert 'raise ValueError("token must not be empty or None")' in text
+    assert "Raises ValueError" in text  # docstring kept: it was the contract
+    assert result.verdict == "CLOSED" and result.fixed == "code"
+
+
+def test_non_builtin_exception_falls_back_to_docs(tmp_path: Path) -> None:
+    mod = tmp_path / "auth.py"
+    mod.write_text(
+        "def authenticate(token: str) -> bool:\n"
+        '    """Raises AuthError if the token is empty or None."""\n'
+        "    if not token:\n"
+        "        return False\n"
+        "    return True\n"
+    )
+    seam = write_check(_raises_seam(mod, "authenticate", "AuthError", "S051"), tmp_path)
+    result = fix_seam(seam, tmp_path)
+    assert "raise AuthError" not in mod.read_text()  # never invent an undefined exception
+    assert result.fixed == "docs"
+
+
+def test_seam_closed_by_earlier_fix_is_not_touched(tmp_path: Path) -> None:
+    mod = tmp_path / "loader.py"
+    mod.write_text(
+        "def load(config: dict) -> str:\n"
+        '    """Raises KeyError if k is missing."""\n'
+        "    return config['k']\n"
+    )
+    seam = Seam(
+        id="S052",
+        classification="FIXABLE",
+        assertion_a="Raises KeyError if k is missing.",
+        source_a=mod,
+        line_a=1,
+        assertion_b="Function 'load' does NOT raise KeyError — returns instead",
+        source_b=mod,
+        line_b=1,
+        check=None,
+        verdict="RESOLVED",
+        question=None,
+    )
+    before = mod.read_text()
+    result = fix_seam(write_check(seam, tmp_path), tmp_path)
+    assert mod.read_text() == before
+    assert result.verdict == "CLOSED" and result.fixed == "already"

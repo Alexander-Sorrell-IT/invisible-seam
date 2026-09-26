@@ -15,6 +15,17 @@ def _next_id(counter: list[int]) -> str:
     return f"C{val:03d}"
 
 
+def json_schema_default(schema_file: Path, field: str) -> tuple[bool, object]:
+    """Returns (True, value) if the JSON schema gives field a default, else (False, None)."""
+    if schema_file.suffix != ".json":
+        return False, None
+    data = json.loads(schema_file.read_text(encoding="utf-8"))
+    props = data.get("properties", {}).get(field)
+    if isinstance(props, dict) and "default" in props:
+        return True, props["default"]
+    return False, None
+
+
 def _extract_json_schema_claims(schema_file: Path, counter: list[int]) -> list[Claim]:
     """Extracts required-field and default-value claims from a JSON Schema file. Returns list of Claim."""
     claims: list[Claim] = []

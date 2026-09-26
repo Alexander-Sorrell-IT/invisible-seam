@@ -4,6 +4,7 @@ import ast
 import re
 from pathlib import Path
 
+from invisible_seam.extractors.config_extractor import json_schema_default
 from invisible_seam.models import Claim, SeamCandidate
 
 
@@ -254,6 +255,18 @@ def _match_config_fallback_claim(claim: Claim, repo_path: Path) -> SeamCandidate
                         behavior_line=node.lineno,
                         conflict=True,
                     )
+
+    # no fallback in the code: the schema can still contradict itself
+    if "requires field" in claim.claim:
+        has_default, value = json_schema_default(claim.source_file, field)
+        if has_default:
+            return SeamCandidate(
+                claim_id=claim.id,
+                behavior=f"The same schema gives '{field}' a default of {value!r}",
+                behavior_file=claim.source_file,
+                behavior_line=claim.source_line,
+                conflict=True,
+            )
 
     return SeamCandidate(
         claim_id=claim.id,
