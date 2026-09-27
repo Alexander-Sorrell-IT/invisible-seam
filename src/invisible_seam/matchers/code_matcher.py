@@ -143,7 +143,10 @@ def _match_doc_code_claim(claim: Claim, repo_path: Path) -> SeamCandidate | None
             return None
         found = _find_named_function(claim.subject, repo_path)
         if found is None:
-            return None
+            # Not a Python function — try the Solidity matcher (missing
+            # revert/access-control guards). Returns None if it can't handle it.
+            from invisible_seam.matchers.solidity_matcher import match_solidity_doc_claim
+            return match_solidity_doc_claim(claim, repo_path)
         code_file, func = found
     if func is None:
         return None
