@@ -280,6 +280,25 @@ def _match_config_fallback_claim(claim: Claim, repo_path: Path) -> SeamCandidate
     )
 
 
+# Self-confirming claim types — the extractor already verified the absence
+# of the expected guard; no further code matching needed. Surface directly
+# as confirmed conflicts (conflict=True).
+_SELF_CONFIRMING_TYPES = {
+    # PHP / WordPress
+    "wp-nonce", "wp-cap", "wp-sanitize", "wp-prepare", "rest-no-perm", "wp-nopriv",
+    # JavaScript / TypeScript
+    "express-noauth", "jwt-nochecks", "eval-sink", "hardcoded-secret",
+    "missing-validation", "cors-wildcard", "proto-pollution", "jsdoc-auth",
+    # Config files
+    "iam-wildcard", "oauth-no-pkce", "csp-unsafe", "auth-disabled",
+    "debug-enabled", "tls-disabled", "secrets-in-config", "weak-jwt-algo",
+    "open-redirect",
+}
+
+# Keep the old name as an alias so existing code doesn't break
+_PHP_SELF_CONFIRMING = _SELF_CONFIRMING_TYPES
+
+
 def match_claims(claims: list[Claim], repo_path: Path) -> list[SeamCandidate]:
     """Pairs each Claim with actual code behavior. Returns SeamCandidate list."""
     results: list[SeamCandidate] = []
@@ -291,6 +310,16 @@ def match_claims(claims: list[Claim], repo_path: Path) -> list[SeamCandidate]:
             candidate = _match_doc_code_claim(claim, repo_path)
         elif claim.type == "config-fallback":
             candidate = _match_config_fallback_claim(claim, repo_path)
+        elif claim.type in _SELF_CONFIRMING_TYPES:
+            # Extractor already confirmed the absence of the expected guard —
+            # surface directly as a confirmed conflict.
+            candidate = SeamCandidate(
+                claim_id=claim.id,
+                behavior=claim.claim,
+                behavior_file=claim.source_file,
+                behavior_line=claim.source_line,
+                conflict=True,
+            )
         if candidate is not None:
             results.append(candidate)
     return results
