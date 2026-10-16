@@ -38,7 +38,8 @@ def scan(path: Path, report: str, output: Path | None) -> None:
     from invisible_seam.report.terminal_report import render_terminal
     from invisible_seam.report.html_report import render_html
 
-    claims = extract_claims(path) + extract_config_claims(path)
+    doc_claims = extract_claims(path)
+    claims = doc_claims + extract_config_claims(path, start_id=len(doc_claims) + 1)
     if not claims:
         click.echo("No claims found.")
         return
@@ -47,6 +48,7 @@ def scan(path: Path, report: str, output: Path | None) -> None:
     claim_map = {c.id: c for c in claims}
 
     seams = []
+    dismissed = 0
     for i, candidate in enumerate(candidates, start=1):
         if not candidate.conflict:
             continue
@@ -59,8 +61,14 @@ def scan(path: Path, report: str, output: Path | None) -> None:
         if seam.classification == "FIXABLE":
             seam = write_check(seam, path)
             seam = run_check(seam, path)
+            if seam.verdict == "CLOSED":
+                # the executed check says claim A holds: false alarm
+                dismissed += 1
+                continue
         seams.append(seam)
 
+    if dismissed:
+        click.echo(f"{dismissed} candidate(s) dismissed by their own check.")
     if not seams:
         click.echo("No seams found. All claims match behavior.")
         return
@@ -85,24 +93,31 @@ def fix(path: Path) -> None:
     from invisible_seam.checker.check_runner import write_check, run_check
     from invisible_seam.fixer.seam_fixer import fix_seam
 
-    claims = extract_claims(path) + extract_config_claims(path)
+    doc_claims = extract_claims(path)
+    claims = doc_claims + extract_config_claims(path, start_id=len(doc_claims) + 1)
     candidates = match_claims(claims, path)
     claim_map = {c.id: c for c in claims}
 
-    for i, candidate in enumerate(candidates, start=1):
+    # pass 1: confirm every seam by execution BEFORE changing anything
+    confirmed = []
+    for candidate in candidates:
         if not candidate.conflict:
             continue
-        claim = claim_map[candidate.claim_id]
-        seam = classify(candidate, claim)
+        seam = classify(candidate, claim_map[candidate.claim_id])
         if seam.classification != "FIXABLE":
             continue
-        seam = write_check(seam, path)
-        seam = run_check(seam, path)
-        if seam.verdict != "RESOLVED":
-            click.echo(f"SKIPPED SEAM #{i} — could not resolve check")
-            continue
+        seam = run_check(write_check(seam, path), path)
+        if seam.verdict == "RESOLVED":
+            confirmed.append(seam)
+
+    # pass 2: patch each confirmed seam, then re-run its own check
+    for seam in confirmed:
         seam = fix_seam(seam, path)
-        if seam.verdict == "CLOSED":
-            click.echo(f"CLOSED: SEAM #{i}  ({seam.assertion_a[:60]})")
+        if seam.verdict == "CLOSED" and seam.fixed == "already":
+            click.echo(f"CLOSED: {seam.assertion_a[:60]}  [already closed by an earlier fix]")
+        elif seam.verdict == "CLOSED":
+            click.echo(f"CLOSED: {seam.assertion_a[:60]}  [fixed in {seam.fixed}]")
+        elif seam.verdict == "RESOLVED":
+            click.echo(f"STILL OPEN: {seam.assertion_a[:60]}  (check still confirms the seam)")
         else:
-            click.echo(f"STILL OPEN: SEAM #{i}  ({seam.assertion_a[:60]})")
+            click.echo(f"UNSOLVED: {seam.assertion_a[:60]}  ({seam.question})")

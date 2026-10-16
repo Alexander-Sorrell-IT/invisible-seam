@@ -18,6 +18,9 @@ class Claim:
     claim: str
     source_file: Path
     source_line: int
+    # function the claim is about, when the source is not the function itself
+    # (e.g. a README section headed `load_api_key(config)`); None for code claims
+    subject: str | None = None
 
 
 @dataclass(frozen=True)
@@ -46,3 +49,5 @@ class Seam:
     check: str | None
     verdict: Verdict
     question: str | None
+    # which side `seam fix` changed: "code", "docs", or "already" (closed by an earlier fix)
+    fixed: str | None = None

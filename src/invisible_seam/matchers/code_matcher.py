@@ -4,6 +4,7 @@ import ast
 import re
 from pathlib import Path
 
+from invisible_seam.extractors.config_extractor import json_schema_default
 from invisible_seam.models import Claim, SeamCandidate
 
 
@@ -31,7 +32,7 @@ def _returns_incompatible(func_node: ast.FunctionDef | ast.AsyncFunctionDef) -> 
 
 def _has_raises_claim(claim_text: str) -> tuple[bool, str]:
     """Returns (True, exception_name) if claim says raises X. Returns (False, '') otherwise."""
-    m = re.search(r"\braises?\s+(\w+)", claim_text, re.IGNORECASE)
+    m = re.search(r"\braises?\s+`?(\w+)", claim_text, re.IGNORECASE)
     if m:
         return True, m.group(1)
     return False, ""
@@ -60,6 +61,9 @@ def _find_function(tree: ast.Module, lineno: int) -> ast.FunctionDef | ast.Async
 
 def _match_type_hint_claim(claim: Claim, repo_path: Path) -> SeamCandidate | None:
     """Matches a type-hint claim against actual code. Returns SeamCandidate or None."""
+    # a parameter annotation says nothing about return behavior: never compare them
+    if claim.claim.startswith("Parameter "):
+        return None
     try:
         source = claim.source_file.read_text(encoding="utf-8")
         tree = ast.parse(source)
@@ -93,39 +97,93 @@ def _match_type_hint_claim(claim: Claim, repo_path: Path) -> SeamCandidate | Non
     )
 
 
+_NEVER_NONE = re.compile(r"\bnever\s+returns?\s+`?None\b", re.IGNORECASE)
+
+
+def _returns_none_somewhere(func_node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Returns True if the function has an explicit `return None` or a bare `return`."""
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.Return) and (
+            node.value is None
+            or (isinstance(node.value, ast.Constant) and node.value.value is None)
+        ):
+            return True
+    return False
+
+
+def _find_named_function(
+    name: str, repo_path: Path
+) -> tuple[Path, ast.FunctionDef | ast.AsyncFunctionDef] | None:
+    """Returns (file, node) for the first function called name in the repo's code."""
+    for py_file in sorted(repo_path.rglob("*.py")):
+        if "_seam_checks" in py_file.parts or "tests" in py_file.relative_to(repo_path).parts:
+            continue
+        try:
+            tree = ast.parse(py_file.read_text(encoding="utf-8"))
+        except (SyntaxError, OSError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+                return py_file, node
+    return None
+
+
 def _match_doc_code_claim(claim: Claim, repo_path: Path) -> SeamCandidate | None:
-    """Matches a doc-code claim against actual code. Returns SeamCandidate or None."""
-    is_raises, exc_name = _has_raises_claim(claim.claim)
-    if not is_raises:
-        return None  # only match raises-type doc claims for now
-
-    # find the function the claim is about
-    try:
-        source = claim.source_file.read_text(encoding="utf-8")
-        tree = ast.parse(source)
-    except (SyntaxError, OSError):
-        return None
-
-    func = _find_function(tree, claim.source_line)
+    """Matches a doc-code claim (docstring or README) against the code it describes."""
+    if claim.source_file.suffix == ".py":
+        try:
+            tree = ast.parse(claim.source_file.read_text(encoding="utf-8"))
+        except (SyntaxError, OSError):
+            return None
+        func = _find_function(tree, claim.source_line)
+        code_file = claim.source_file
+    else:
+        # README/docs claim: only matchable when its section names a function
+        if claim.subject is None:
+            return None
+        found = _find_named_function(claim.subject, repo_path)
+        if found is None:
+            # Not a Python function — try the Solidity matcher (missing
+            # revert/access-control guards). Returns None if it can't handle it.
+            from invisible_seam.matchers.solidity_matcher import match_solidity_doc_claim
+            return match_solidity_doc_claim(claim, repo_path)
+        code_file, func = found
     if func is None:
         return None
 
-    actually_raises = _function_raises(func, exc_name)
-    conflict = not actually_raises
-
-    behavior = (
-        f"Function '{func.name}' does NOT raise {exc_name} — returns instead"
-        if conflict
-        else f"Function '{func.name}' raises {exc_name} as claimed"
-    )
+    if _NEVER_NONE.search(claim.claim):
+        conflict = _returns_none_somewhere(func)
+        behavior = (
+            f"Function '{func.name}' returns None on at least one path"
+            if conflict
+            else f"Function '{func.name}' never returns None as claimed"
+        )
+    else:
+        is_raises, exc_name = _has_raises_claim(claim.claim)
+        if not is_raises:
+            return None  # only raises / never-None doc claims are matched for now
+        conflict = not _function_raises(func, exc_name)
+        behavior = (
+            f"Function '{func.name}' does NOT raise {exc_name} — returns instead"
+            if conflict
+            else f"Function '{func.name}' raises {exc_name} as claimed"
+        )
 
     return SeamCandidate(
         claim_id=claim.id,
         behavior=behavior,
-        behavior_file=claim.source_file,
+        behavior_file=code_file,
         behavior_line=func.lineno,
         conflict=conflict,
     )
+
+
+def _same_literal(schema_value: str, code_node: ast.expr) -> bool:
+    """Returns True if the schema default string and the code default node are the same literal."""
+    try:
+        return bool(ast.literal_eval(schema_value) == ast.literal_eval(code_node))
+    except (ValueError, SyntaxError):
+        return False
 
 
 def _match_config_fallback_claim(claim: Claim, repo_path: Path) -> SeamCandidate | None:
@@ -135,6 +193,7 @@ def _match_config_fallback_claim(claim: Claim, repo_path: Path) -> SeamCandidate
     if not m:
         return None
     field = m.group(1)
+    m_default = re.search(r"has default value '(.*)'$", claim.claim)
 
     for py_file in sorted(repo_path.rglob("*.py")):
         if "_seam_checks" in py_file.parts:
@@ -155,6 +214,15 @@ def _match_config_fallback_claim(claim: Claim, repo_path: Path) -> SeamCandidate
                 and isinstance(node.args[0], ast.Constant)
                 and str(node.args[0].value) == field
             ):
+                if m_default is not None and _same_literal(m_default.group(1), node.args[1]):
+                    # schema default and code default agree: no contradiction
+                    return SeamCandidate(
+                        claim_id=claim.id,
+                        behavior=f"Code default for '{field}' matches schema default",
+                        behavior_file=py_file,
+                        behavior_line=node.lineno,
+                        conflict=False,
+                    )
                 behavior = (
                     f"Code calls .get('{field}', {ast.unparse(node.args[1])}) "
                     f"— silently uses default when field is absent"
@@ -191,6 +259,18 @@ def _match_config_fallback_claim(claim: Claim, repo_path: Path) -> SeamCandidate
                         conflict=True,
                     )
 
+    # no fallback in the code: the schema can still contradict itself
+    if "requires field" in claim.claim:
+        has_default, value = json_schema_default(claim.source_file, field)
+        if has_default:
+            return SeamCandidate(
+                claim_id=claim.id,
+                behavior=f"The same schema gives '{field}' a default of {value!r}",
+                behavior_file=claim.source_file,
+                behavior_line=claim.source_line,
+                conflict=True,
+            )
+
     return SeamCandidate(
         claim_id=claim.id,
         behavior=f"No silent fallback found for field '{field}'",
@@ -198,6 +278,27 @@ def _match_config_fallback_claim(claim: Claim, repo_path: Path) -> SeamCandidate
         behavior_line=claim.source_line,
         conflict=False,
     )
+
+
+# Self-confirming claim types — the extractor already verified the absence
+# of the expected guard; no further code matching needed. Surface directly
+# as confirmed conflicts (conflict=True).
+_SELF_CONFIRMING_TYPES = {
+    # Python security facts (AST source-to-sink verified by extractor)
+    "py-sql-format",
+    # PHP / WordPress
+    "wp-nonce", "wp-cap", "wp-sanitize", "wp-prepare", "rest-no-perm", "wp-nopriv",
+    # JavaScript / TypeScript
+    "express-noauth", "jwt-nochecks", "eval-sink", "hardcoded-secret",
+    "missing-validation", "cors-wildcard", "proto-pollution", "jsdoc-auth",
+    # Config files
+    "iam-wildcard", "oauth-no-pkce", "csp-unsafe", "auth-disabled",
+    "debug-enabled", "tls-disabled", "secrets-in-config", "weak-jwt-algo",
+    "open-redirect",
+}
+
+# Keep the old name as an alias so existing code doesn't break
+_PHP_SELF_CONFIRMING = _SELF_CONFIRMING_TYPES
 
 
 def match_claims(claims: list[Claim], repo_path: Path) -> list[SeamCandidate]:
@@ -211,6 +312,16 @@ def match_claims(claims: list[Claim], repo_path: Path) -> list[SeamCandidate]:
             candidate = _match_doc_code_claim(claim, repo_path)
         elif claim.type == "config-fallback":
             candidate = _match_config_fallback_claim(claim, repo_path)
+        elif claim.type in _SELF_CONFIRMING_TYPES:
+            # Extractor already confirmed the absence of the expected guard —
+            # surface directly as a confirmed conflict.
+            candidate = SeamCandidate(
+                claim_id=claim.id,
+                behavior=claim.claim,
+                behavior_file=claim.source_file,
+                behavior_line=claim.source_line,
+                conflict=True,
+            )
         if candidate is not None:
             results.append(candidate)
     return results

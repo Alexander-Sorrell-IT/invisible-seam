@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from invisible_seam.extractors.config_extractor import json_schema_default
 from invisible_seam.models import Claim, Seam, SeamCandidate
 
 _SEAM_COUNTER: list[int] = [1]
@@ -32,11 +33,15 @@ def classify(candidate: SeamCandidate, claim: Claim) -> Seam:
         is_default_claim = "default" in claim.claim.lower()
         # A required-claim paired with a default value in the schema = PARADOX
         # because you can't be both required and have a default
-        if is_required_claim and field and "default" in candidate.behavior.lower():
+        schema_has_default, schema_value = (
+            json_schema_default(claim.source_file, field) if field else (False, None)
+        )
+        if is_required_claim and schema_has_default:
+            # the contradiction is inside the spec itself: no code change can settle it
             classification = "PARADOX"
             question = (
-                f"Is '{field}' truly required (schema says required) or optional "
-                f"(code uses a default)? The schema and the code contradict each other."
+                f"The schema marks '{field}' required AND gives it a default of "
+                f"{schema_value!r}. Must callers always supply '{field}', or may it be omitted?"
             )
         else:
             classification = "FIXABLE"
