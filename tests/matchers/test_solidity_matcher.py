@@ -19,8 +19,24 @@ contract Vault {
         // paused
     }
 
+    function setFee(uint256 f) external restricted {
+        fee = f;
+    }
+
     function setPrice(uint256 p) public {
         price = p;
+    }
+
+    function getPrice() public view returns (uint256) {
+        return price;
+    }
+
+    function _grantRole(bytes32 r, address a) internal {
+        roles[r][a] = true;
+    }
+
+    function _helper() private {
+        counter++;
     }
 }
 """
@@ -37,43 +53,54 @@ def _claim(text, subject):
 
 
 def test_find_solidity_function(tmp_path):
-    repo = _repo(tmp_path)
-    found = sm.find_solidity_function("setPrice", repo)
+    found = sm.find_solidity_function("setPrice", _repo(tmp_path))
     assert found is not None
     path, line, body = found
     assert path.name == "Vault.sol" and "price = p" in body
 
 
 def test_missing_guard_is_conflict(tmp_path):
-    repo = _repo(tmp_path)
-    # claim asserts setPrice is owner-only, but its body has no require/modifier
-    c = _claim("Only the owner may call setPrice; it reverts otherwise.", "setPrice")
-    cand = sm.match_solidity_doc_claim(c, repo)
+    # public, state-changing, no modifier, no msg.sender check -> real missing access control
+    cand = sm.match_solidity_doc_claim(
+        _claim("Only the owner may call setPrice; it reverts otherwise.", "setPrice"), _repo(tmp_path))
     assert cand is not None and cand.conflict is True
 
 
 def test_require_guard_no_conflict(tmp_path):
-    repo = _repo(tmp_path)
-    c = _claim("withdraw reverts if the caller is not the owner.", "withdraw")
-    cand = sm.match_solidity_doc_claim(c, repo)
+    cand = sm.match_solidity_doc_claim(
+        _claim("withdraw reverts if the caller is not the owner.", "withdraw"), _repo(tmp_path))
     assert cand is not None and cand.conflict is False
 
 
-def test_modifier_guard_no_conflict(tmp_path):
-    repo = _repo(tmp_path)
-    c = _claim("Only owner can call pause.", "pause")
-    cand = sm.match_solidity_doc_claim(c, repo)
+def test_only_modifier_no_conflict(tmp_path):
+    cand = sm.match_solidity_doc_claim(
+        _claim("Only owner can call pause.", "pause"), _repo(tmp_path))
     assert cand is not None and cand.conflict is False
+
+
+def test_nonstandard_modifier_counts_as_guard(tmp_path):
+    # 'restricted' is a modifier even though it isn't named only* -> guarded, no conflict
+    cand = sm.match_solidity_doc_claim(
+        _claim("Only an authorized account may call setFee.", "setFee"), _repo(tmp_path))
+    assert cand is not None and cand.conflict is False
+
+
+def test_internal_function_access_claim_not_flagged(tmp_path):
+    # internal function: the access boundary is its public caller, not here -> never flag
+    assert sm.match_solidity_doc_claim(
+        _claim("Only owner may grant roles.", "_grantRole"), _repo(tmp_path)) is None
+
+
+def test_private_function_not_flagged(tmp_path):
+    assert sm.match_solidity_doc_claim(
+        _claim("Only authorized code calls _helper.", "_helper"), _repo(tmp_path)) is None
 
 
 def test_non_guard_claim_not_matched(tmp_path):
-    repo = _repo(tmp_path)
-    # no revert/access wording -> not our business, return None (never a false seam)
-    c = _claim("setPrice updates the stored price.", "setPrice")
-    assert sm.match_solidity_doc_claim(c, repo) is None
+    assert sm.match_solidity_doc_claim(
+        _claim("setPrice updates the stored price.", "setPrice"), _repo(tmp_path)) is None
 
 
 def test_unknown_function_not_matched(tmp_path):
-    repo = _repo(tmp_path)
-    c = _claim("mintTokens reverts unless owner.", "mintTokens")
-    assert sm.match_solidity_doc_claim(c, repo) is None
+    assert sm.match_solidity_doc_claim(
+        _claim("mintTokens reverts unless owner.", "mintTokens"), _repo(tmp_path)) is None

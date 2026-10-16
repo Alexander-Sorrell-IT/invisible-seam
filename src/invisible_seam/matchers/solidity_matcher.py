@@ -76,21 +76,76 @@ def find_solidity_function(name: str, repo_path: Path) -> tuple[Path, int, str] 
     return None
 
 
+_SIG_KEYWORDS = {
+    "public", "private", "external", "internal", "view", "pure", "payable",
+    "virtual", "override", "returns", "return", "memory", "calldata",
+    "storage", "immutable", "constant",
+}
+
+
+def _signature_tail(block: str) -> str:
+    """Text after the parameter list, where visibility/modifiers live."""
+    sig = block.split("{", 1)[0]
+    open_paren = sig.find("(")
+    if open_paren == -1:
+        return sig
+    depth = 0
+    for i in range(open_paren, len(sig)):
+        if sig[i] == "(":
+            depth += 1
+        elif sig[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return sig[i + 1:]
+    return sig
+
+
+def _custom_modifiers(block: str) -> list[str]:
+    """Modifier identifiers in the signature tail (before any returns clause).
+
+    Any non-keyword identifier there is a modifier invocation — including
+    project-specific names (`restricted`, `initializer`, `onlyOwner`) that
+    a name-prefix allowlist cannot foresee.
+    """
+    tail = _signature_tail(block).split(" returns ")[0]
+    return [
+        w for w in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", tail)
+        if w not in _SIG_KEYWORDS
+    ]
+
+
+def _visibility(block: str) -> str:
+    tail = _signature_tail(block)
+    for vis in ("internal", "private"):
+        if re.search(rf"\b{vis}\b", tail):
+            return vis
+    return "external/public"
+
+
 def _body_has_guard(block: str, kind: str) -> bool:
-    """True if the function block carries the asserted guard. A function-level
-    modifier (`only...`) counts for both kinds (modifiers usually revert)."""
+    """True if the function block carries the asserted guard.
+
+    Any custom modifier counts (modifiers conventionally gate or revert).
+    In-body checks count in both polarities: `msg.sender == owner` inside
+    require() and `msg.sender != vault` guarding a revert/return alike,
+    plus authorization helper calls.
+    """
     sig = block.split("{", 1)[0]
     body = block[len(sig):]
-    has_modifier = bool(re.search(r"\bonly[A-Za-z0-9_]+", sig))
+    has_modifier = bool(_custom_modifiers(block))
     if kind == "revert":
         return has_modifier or bool(
             re.search(r"\brequire\s*\(", body) or re.search(r"\brevert\b", body)
         )
     if kind == "access":
         return has_modifier or bool(
-            re.search(r"require\s*\(\s*msg\.sender", body)
-            or re.search(r"\bmsg\.sender\s*==", body)
-            or re.search(r"\b(hasRole|_checkOwner|_checkRole|onlyRole)\b", block)
+            re.search(r"(?:msg\.sender|_msgSender\(\))\s*(?:==|!=)", body)
+            or re.search(r"(?:==|!=)\s*(?:msg\.sender|_msgSender\(\))", body)
+            or re.search(
+                r"\b\w*(?:hasRole|checkOwner|checkRole|onlyRole|"
+                r"requireAuth|checkAuth|assertOwner|assertRole)\w*\s*\(",
+                block,
+            )
         )
     return False
 
@@ -108,6 +163,10 @@ def match_solidity_doc_claim(claim: Claim, repo_path: Path) -> SeamCandidate | N
     if found is None:
         return None
     path, line, block = found
+    # internal/private functions are not externally callable: the access
+    # boundary is their caller, so a doc access claim never flags here.
+    if _visibility(block) in {"internal", "private"}:
+        return None
     has = _body_has_guard(block, kind)
     behavior = (
         f"Solidity function '{claim.subject}' has NO {kind} guard "

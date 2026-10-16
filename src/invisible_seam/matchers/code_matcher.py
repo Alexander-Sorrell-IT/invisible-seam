@@ -284,6 +284,8 @@ def _match_config_fallback_claim(claim: Claim, repo_path: Path) -> SeamCandidate
 # of the expected guard; no further code matching needed. Surface directly
 # as confirmed conflicts (conflict=True).
 _SELF_CONFIRMING_TYPES = {
+    # Python security facts (AST source-to-sink verified by extractor)
+    "py-sql-format",
     # PHP / WordPress
     "wp-nonce", "wp-cap", "wp-sanitize", "wp-prepare", "rest-no-perm", "wp-nopriv",
     # JavaScript / TypeScript
