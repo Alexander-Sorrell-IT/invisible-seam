@@ -300,57 +300,10 @@ def _extract_cairo_claims(repo_path: Path, counter: list[int]) -> list[Claim]:
 
 
 def extract_claims(repo_path: Path, start_id: int = 1) -> list[Claim]:
-    """Scans repo_path for claims from Python, Solidity, Cairo, PHP, JS/TS, Go, Rust, Java, and config files."""
+    """Scans repo_path for behavioral claims from documentation, type hints, and contract annotations."""
     counter = [start_id]
     claims = _extract_readme_claims(repo_path, counter)
     claims += _extract_python_claims(repo_path, counter)
-    # Python security facts (invariant-based, not documentation-based)
-    try:
-        from invisible_seam.extractors.python_security_extractor import (
-            extract_python_security_claims,
-        )
-        _pysec = extract_python_security_claims(repo_path, start_id=counter[0])
-        counter[0] += len(_pysec)
-        claims += _pysec
-    except ImportError:
-        pass
     claims += _extract_solidity_claims(repo_path, counter)
     claims += _extract_cairo_claims(repo_path, counter)
-    # PHP / WordPress support
-    try:
-        from invisible_seam.extractors.php_extractor import extract_php_claims
-        claims += extract_php_claims(repo_path, start_id=counter[0])
-        counter[0] += len([c for c in claims if hasattr(c, 'id') and c.id])
-    except ImportError:
-        pass
-    # JavaScript / TypeScript support
-    try:
-        from invisible_seam.extractors.js_extractor import extract_js_claims
-        claims += extract_js_claims(repo_path, start_id=counter[0])
-    except ImportError:
-        pass
-    # Go support
-    try:
-        from invisible_seam.extractors.go_extractor import extract_go_claims
-        claims += extract_go_claims(repo_path, start_id=counter[0])
-    except ImportError:
-        pass
-    # Rust support
-    try:
-        from invisible_seam.extractors.rust_extractor import extract_rust_claims
-        claims += extract_rust_claims(repo_path, start_id=counter[0])
-    except ImportError:
-        pass
-    # Java support
-    try:
-        from invisible_seam.extractors.java_extractor import extract_java_claims
-        claims += extract_java_claims(repo_path, start_id=counter[0])
-    except ImportError:
-        pass
-    # Config file security checks (YAML / JSON / TOML / env)
-    try:
-        from invisible_seam.extractors.config_extractor_security import extract_config_claims
-        claims += extract_config_claims(repo_path, start_id=counter[0])
-    except ImportError:
-        pass
     return claims
