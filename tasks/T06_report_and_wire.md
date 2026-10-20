@@ -1,3 +1,5 @@
+> **HISTORICAL TASK SPEC — implemented; current behavior in `README.md` + `AGENTS.md`.**
+
 # T06 — Report Generator + Wire up CLI
 
 ## Context files (use @file — do not explore)

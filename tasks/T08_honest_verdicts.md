@@ -1,3 +1,5 @@
+> **HISTORICAL TASK SPEC — implemented; current behavior in `README.md` + `AGENTS.md`.**
+
 # T08 — Honest verdicts (the check must own the verdict)
 
 ## Why

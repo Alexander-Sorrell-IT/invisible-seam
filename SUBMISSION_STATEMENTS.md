@@ -1,3 +1,5 @@
+> **HISTORICAL (early draft) — submission claims predate the shipped verdict machinery; current behavior in `README.md` + `AGENTS.md`.**
+
 # Submission Statements
 
 ## Problem & Solution Statement (≤500 words)

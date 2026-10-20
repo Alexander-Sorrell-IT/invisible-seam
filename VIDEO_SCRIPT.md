@@ -1,3 +1,5 @@
+> **HISTORICAL ARTIFACT — video script, not system documentation. Numbers in it are scripted claims, not verified output.**
+
 # Demo Video Script — INVISIBLE SEAM
 # 3:00 exactly. Every second planned.
 

@@ -1,3 +1,5 @@
+> **HISTORICAL TASK SPEC — implemented; current behavior in `README.md` + `AGENTS.md`.**
+
 # T05 — Check Writer + Check Runner
 
 ## Context files (use @file — do not explore)

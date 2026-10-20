@@ -8,15 +8,17 @@ Isolate the two irreconcilable assertions and present ONLY the conflict." — Th
 The model proposes. The deterministic runner owns the verdict.
 
 ## Output format (non-negotiable)
+
+(Refreshed 2026-10-20: module map + verdict states synced to shipped code.)
 Every finding is a SEAM:
 ```
 SEAM #n  [FIXABLE | PARADOX]
 Assertion A: <what the doc/docstring/config/spec claims>  (source: file:line)
 Assertion B: <what the code actually does>               (source: file:line)
 Check:       <one shell command or pytest invocation that decides it>
-Verdict:     RESOLVED | UNSOLVED
+Verdict:     RESOLVED | UNSOLVED | CERTAIN | KNOWN* | CLOSED   (*KNOWN: in the type Literal, never assigned)
 ```
-No summaries. No log dumps. No "this might be an issue." RESOLVED or UNSOLVED, nothing else.
+No summaries. No log dumps. No "this might be an issue." The runner's verdict, nothing else.
 
 ## Seam types (v1 scope)
 1. **doc-code**: README/docs say X, code does Y
@@ -34,6 +36,8 @@ No summaries. No log dumps. No "this might be an issue." RESOLVED or UNSOLVED, n
 - **CERTAIN**: seam exists, check is pending execution
 - **RESOLVED**: check ran and decided it
 - **UNSOLVED**: honest failure — tool says it cannot decide
+- **CLOSED**: check exited with the holds-code (seam gone) — exit-code only, no parse step
+- **KNOWN**: defined in `models.py` Literal; **never assigned** anywhere in shipped code (dead vocabulary)
 
 ## Project layout
 ```
@@ -46,12 +50,12 @@ invisible-seam/
 │   ├── cli.py                   ← entry point: `seam scan <path>`
 │   ├── extractors/
 │   │   ├── __init__.py
-│   │   ├── doc_extractor.py     ← reads README, docstrings, type hints → list[Claim]
+│   │   ├── doc_extractor.py     ← reads README, docstrings, type hints + Solidity claims → list[Claim]
 │   │   ├── config_extractor.py  ← reads JSON/YAML schemas → list[Claim]
-│   │   └── openapi_extractor.py ← reads OpenAPI specs → list[Claim]
 │   ├── matchers/
 │   │   ├── __init__.py
-│   │   └── code_matcher.py      ← pairs Claim with actual code behavior → list[SeamCandidate]
+│   │   ├── code_matcher.py      ← pairs Claim with actual code behavior → list[SeamCandidate]
+│   │   └── solidity_matcher.py  ← matches Solidity claims to function bodies
 │   ├── classifier/
 │   │   ├── __init__.py
 │   │   └── seam_classifier.py   ← classifies FIXABLE vs PARADOX

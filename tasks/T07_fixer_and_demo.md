@@ -1,3 +1,5 @@
+> **HISTORICAL TASK SPEC — implemented; current behavior in `README.md` + `AGENTS.md`.**
+
 # T07 — Seam Fixer + Demo Repo
 
 ## Context files (use @file — do not explore)

@@ -1,3 +1,5 @@
+> **HISTORICAL TASK SPEC — implemented; current behavior in `README.md` + `AGENTS.md`.**
+
 # T03 — Config Claim Extractor (config-fallback seam type)
 
 ## Context files (use @file — do not explore)

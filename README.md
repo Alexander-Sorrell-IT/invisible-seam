@@ -17,7 +17,7 @@ SEAM #1  [FIXABLE]                              RESOLVED
 ────────────────────────────────────────────────────────────
 Assertion A: Never returns None — always returns a list.  (README.md:13)
 Assertion B: Function returns None when db is empty.      (users.py:7)
-Check:       pytest tests/_seam_checks/seam_S001.py -v
+Check:       python tests/_seam_checks/seam_S001.py
 Verdict:     RESOLVED — seam confirmed
 
 ────────────────────────────────────────────────────────────
@@ -99,7 +99,7 @@ seam fix ./my_project
 ## Try it on the demo repo
 
 ```bash
-# 8 planted seams — 6 FIXABLE, 2 PARADOX
+# demo_repo: 11 seams found — 10 FIXABLE, 1 PARADOX (observed 2026-10-20)
 seam scan demo_repo/
 
 # fix the fixable ones and watch them close
@@ -122,6 +122,13 @@ Every design decision in this tool comes from a single doctrine: **The iPhone Pr
 > The model proposes. Deterministic executed checks own the verdict.
 
 The classification system (FIXABLE vs PARADOX) comes from the distinction between problems where the impossibility is **outside** the spec (one side is wrong — fixable) versus problems where the impossibility is **inside** the spec (it contradicts itself — paradox, requires human resolution).
+
+> Reading the output: **classification** (FIXABLE/PARADOX, header) is not the
+> **verdict** (vocabulary in `models.py`, assigned by the check runner in
+> `checker/check_runner.py` purely on the check's exit code: holds-code →
+> CLOSED, confirmed-code → RESOLVED, anything else → UNSOLVED; `fix_seam`
+> just re-runs it. KNOWN is defined in the Literal but never assigned by
+> shipped code).
 
 The verdict states (RESOLVED / UNSOLVED / CERTAIN / KNOWN) map to four observed cognitive modes for how problems actually get solved.
 
@@ -150,8 +157,8 @@ invisible-seam/
 │   └── report/
 │       ├── terminal_report.py   ← rich colored terminal output
 │       └── html_report.py       ← self-contained HTML report
-├── demo_repo/                   ← sample repo with 8 planted seams
-├── tests/                       ← 30 passing tests
+├── demo_repo/                   ← sample repo (11 seams found: 10F/1P)
+├── tests/                       ← 64 passing tests (`python -m pytest`)
 └── .bob/
     ├── rules/                   ← coding.md + seam_rules.md
     ├── seam_auditor_mode.yaml   ← custom Bob mode

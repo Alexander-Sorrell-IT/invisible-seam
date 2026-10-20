@@ -1,3 +1,5 @@
+> **HISTORICAL TASK SPEC — implemented; current behavior in `README.md` + `AGENTS.md`.**
+
 # T02 — Claim Extractor (doc-code + type-hint seam types)
 
 ## Context files (use @file — do not explore)

@@ -1,3 +1,5 @@
+> **HISTORICAL TASK SPEC — implemented; current behavior in `README.md` + `AGENTS.md`.**
+
 # T01 — Scaffold + pyproject.toml + CLI skeleton
 
 ## Context files (use @file — do not explore)

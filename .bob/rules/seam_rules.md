@@ -11,7 +11,7 @@ SEAM #n  [FIXABLE | PARADOX]
 Assertion A: <claim>   (source: file:line)
 Assertion B: <behavior> (source: file:line)
 Check:       <one command>
-Verdict:     RESOLVED | UNSOLVED
+Verdict:     RESOLVED | UNSOLVED | CERTAIN | KNOWN* | CLOSED   (*KNOWN never assigned in code)
 ```
 
 ## Classification rules
@@ -21,6 +21,7 @@ Verdict:     RESOLVED | UNSOLVED
 
 ## Verdict rules
 - RESOLVED: check executed and returned a definitive result
+- CLOSED: check exited with the holds-code (seam gone) — decided by exit code alone
 - UNSOLVED: check could not execute, or result was ambiguous — say so honestly
 - NEVER output: "this might be", "possibly", "could indicate", "appears to"
 - The tool either knows or it doesn't. If it doesn't: UNSOLVED.
